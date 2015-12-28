@@ -1,0 +1,182 @@
+---
+title: "Predictive Machine Learning"
+author: "AIS1209"
+date: "December 27, 2015"
+output: html_document
+---
+# Summary
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. In this project, the goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. The subjects were asked to perform barbell lifts correctly and incorrectly in 5 different ways. A model will be developed to predict the manner in which the subjects performed the exercise, i.e, it will predict the activity type from the data. The outcome variable is the *classe* variable in the training set. 
+
+
+# Building the Model
+The train (https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) and 
+
+test (https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv) 
+
+data sets consist of 159 predictor variables. The train data set also contains the outcome variable *classe*. The train and test sets were cleaned up by (1) removing columns containing **NA** and division by zero errors **#DIV/0!**, and (2) removing the first seven columns of categorical data. The remaining predictor set contained 52 predictor variables.
+Given the non-trivially-sized data set, Random Forests was the algorithm of choice for model building. Some of the features of Random Forests that led to selecting the algorithm as a method for the project are described [here][1]:
+
+[1]: http://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm#overview "here"
+
+* excellent accuracy;
+* efficient on large data bases;
+* ability to handle thousands of input variables without variable deletion; 
+* ability to produce estimates of what variables are important in the classification;
+* ability to generate an internal unbiased estimate of the generalization error as the forest building progresses;
+* effective method for estimating missing data and maintains accuracy when a large proportion of the data are missing.
+
+```{r, echo = F, cache = T, tidy = T}
+train <- read.csv("pml-training.csv", na.strings = c("NA", "#DIV/0!"))
+test <- read.csv("pml-testing.csv")
+
+# Remove columns with NA's
+train1 <- train[ , apply(train, 2, function(x) !any(is.na(x)))]
+test1 <- test[ , apply(test, 2, function(x) !any(is.na(x)))]
+#str(train1)
+
+# Eliminate categorical variables.
+train1 <- train1[,8:ncol(train1)]
+test1 <- test1[,8:(ncol(test1)-1)]
+```
+
+# Cross validation and Out-of-sample Accuracy
+As described in [1] "there is no need for cross-validation or a separate test set to get an unbiased estimate of the test set error". The out-of-bag error (oob) is estimated internally, during the run. For the default settings, the oob estimate of error rate was 0.29% and for 200 trees with 10 trees per node, the same measure was less than 0.50%, as shown below.
+```{r, echo = FALSE, cache = T}
+library(randomForest)
+set.seed(1234)
+modelFit <- randomForest(train1[,1:(ncol(train1)-1)], train1$classe, ntree = 200, nodesize = 10)
+print(modelFit)
+```
+
+Random Forests are expected to have high accuracy of prediction. For both models, a k-fold cross validation (k = 5) was used to obtain a reliable estimate of a model's out of sample predictive accuracy. The average value (over all folds) of the area under the ROC curve (receiver operating characteristic curve, a visualization of the true positive rate against the false positive rate for the different possible cutpoints of test or model) was used as an estimate on how the model would perform on out-of-sample sets. The models returned 90% and 100% accuracy.
+
+```{r, echo = F, cache = T}
+library(pROC)
+k <- 5
+n <- floor(nrow(train1)/k)
+err.vec <- vector(mode = "numeric", length = k)
+err1.vec <- err.vec
+for (ii in 1:k) {
+    s1 <- (ii-1)*n +1
+    s2 <- ii * n
+    subset <- s1:s2
+    cv.train <- train1[-subset,]
+    cv.test <- train1[subset,]
+    fitM <- randomForest(x = cv.train[,-(ncol(cv.train)-1)], y = cv.train[,ncol(cv.train)], ntree = 200, nodesize = 10)
+    fitM1 <- randomForest(x = cv.train[,-(ncol(cv.train)-1)], y = cv.train[,ncol(cv.train)])
+    prediction <- predict(fitM, newdata = cv.test, type = "prob")[,2]
+    prediction1 <- predict(fitM1, newdata = cv.test, type = "prob")[,2]
+    
+    err.vec[ii] <- (auc(cv.test[,ncol(cv.test[,-(ncol(cv.train)-1)])], prediction))
+    err1.vec[ii] <- (auc(cv.test[,ncol(cv.test[,-(ncol(cv.train)-1)])], prediction1))
+}
+print(paste("Area under ROC curve, 200 trees ", round(mean(err.vec),2)))
+print(paste("Area under ROC curve, 500 trees ", round(mean(err1.vec),2)))
+```
+
+Finally, since overfitting usually is a disadvantage with random trees, `rfcv` was used to analyze the prediction performance of the random forest model (n = 200 trees) depending on the number or predictors. In this case, there does not seem any difference for different number of variables.
+```{r, cache = T, echo=F, fig.height=3}
+library(randomForest)
+result <- rfcv(train1[,-(ncol(train1)-1)], train1$classe, cv.fold = 5, ntree = 200, nodesize = 10)
+#result1 <- rfcv(train1[,-(ncol(train1)-1)], train1$classe, cv.fold = 5)
+with(result, plot(n.var, error.cv, log="x", type="o", lwd=2, main = "200 trees"))
+df <- data.frame(n.var = result$n.var, error.cv = result$error.cv)
+print(df)
+```
+
+# Variable Importance
+Shown are the top 5 variables (decreasing order of importance, n= 200 trees):
+```{r, echo=F}
+library(car)
+library(caret)
+vi <- varImp(modelFit)
+vi <- data.frame(var = row.names(vi), overall = vi$Overall)
+vi <- vi[order(-vi$overall),]
+print(head(vi))
+```
+
+# Prediction on 20 Test Cases
+Random Forest models with ntree = 200, nodesize = 10 and default settings (ntree = 500) produced the same classification results on the test data set.
+```{r, echo =F, cache=T}
+p <- predict(modelFit, newdata = test1)
+print(p)
+```
+
+[1]: http://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm#overview
+
+# Appendix -- Code
+```{r, eval= F}
+library(car)
+library(caret)
+library(e1071)
+library(randomForest)
+library(pROC)
+
+file <- download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", 
+                      destfile = "pml-training.csv")
+file1 <- download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", 
+                      destfile = "pml-testing.csv")
+setwd("~/MyStuff/Programming/Rwork/PracticalMachineLearning/Project")
+train <- read.csv("pml-training.csv", na.strings = c("NA", "#DIV/0!"))
+test <- read.csv("pml-testing.csv")
+
+# Remove columns with NA's
+train1 <- train[ , apply(train, 2, function(x) !any(is.na(x)))]
+test1 <- test[ , apply(test, 2, function(x) !any(is.na(x)))]
+str(train1)
+# Eliminate categorical variables.
+train1 <- train1[,8:ncol(train1)]
+test1 <- test1[,8:(ncol(test1)-1)]
+
+library(randomForest)
+modelFit <- randomForest(train1[,1:(ncol(train1)-1)], train1$classe, ntree = 200, nodesize = 10)
+
+# Default produces same answers
+modelFit1 <- randomForest(train1[,1:(ncol(train1)-1)], train1$classe)
+p <- predict(modelFit, newdata = test1)
+p1 <- predict(modelFit1, newdata = test1)
+
+answers <- as.character(p)
+
+pml_write_files = function(x){
+    n = length(x)
+    for(i in 1:n){
+        filename = paste0("problem_id_",i,".txt")
+        write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+    }
+}
+pml_write_files(answers)
+
+# Variable Importance
+vi <- varImp(modelFit1)
+vi <- data.frame(var = row.names(vi), overall = vi$Overall)
+vi <- vi[order(-vi$overall),]
+head(vi)
+
+# Cross validation (overfitting) K-fold
+k <- 5
+n <- floor(nrow(train1)/k)
+err.vec <- vector(mode = "numeric", length = k)
+err1.vec <- err.vec
+for (ii in 1:k) {
+    s1 <- (ii-1)*n +1
+    s2 <- ii * n
+    subset <- s1:s2
+    cv.train <- train1[-subset,]
+    cv.test <- train1[subset,]
+    fitM <- randomForest(x = cv.train[,-(ncol(cv.train)-1)], y = cv.train[,ncol(cv.train)], ntree = 200, nodesize = 10)
+    fitM1 <- randomForest(x = cv.train[,-(ncol(cv.train)-1)], y = cv.train[,ncol(cv.train)])
+    prediction <- predict(fitM, newdata = cv.test, type = "prob")[,2]
+    prediction1 <- predict(fitM1, newdata = cv.test, type = "prob")[,2]
+    
+    err.vec[ii] <- (auc(cv.test[,ncol(cv.test[,-(ncol(cv.train)-1)])], prediction))
+    err1.vec[ii] <- (auc(cv.test[,ncol(cv.test[,-(ncol(cv.train)-1)])], prediction1))
+}
+print(paste("Area under ROC curve ", round(mean(err.vec),2)))
+print(paste("Area under ROC curve ", round(mean(err1.vec),2)))
+
+result <- rfcv(train1[,-(ncol(train1)-1)], train1$classe, cv.fold = 5, ntree = 200, nodesize = 10)
+with(result, plot(n.var, error.cv, log="x", type="o", lwd=2))
+
+```
+  
